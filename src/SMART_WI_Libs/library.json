@@ -1,0 +1,15 @@
+{
+    "name": "SMART_WI_Libs",
+    "version": "1.0.0",
+    "description": "Library for SMART Wi-Fi Modules",
+    "keywords": "SMART, Wi-Fi",
+    "authors": [
+        {
+            "name": "Csaba Freiberger",
+            "email": "csaba.freiberger@witzenmann.com"
+        }
+    ],
+    "license": "MIT",
+    "frameworks": "arduino",
+    "platforms": "atmelavr"
+}

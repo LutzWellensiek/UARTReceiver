@@ -1,0 +1,209 @@
+/**
+ * @file main_debug.cpp
+ * @brief Debug-Version für Binärdaten-Empfang mit detaillierten Ausgaben
+ * @date 2025-07-15
+ */
+
+#include "Arduino.h"
+#include "util/atomic.h"
+#include "UARTReceiver.h"
+#include "UART_Libs/KitConfig.h"
+#include "UART_Libs/SerialMon.h"
+#include <ArduinoJson.h>
+
+// Hardware-Konfiguration
+const int LED_PIN = 13;  // Onboard LED
+
+// UART Receiver Instance
+UARTReceiver uartReceiver(&Serial2, &SerialMon, SerialPIN_TX, SerialPIN_RX, UART2_BAUDRATE, LED_PIN);
+
+// Statistiken
+uint32_t totalPacketsReceived = 0;
+uint32_t totalBytesReceived = 0;
+
+/**
+ * @brief Detaillierte Binärdaten-Verarbeitung mit Debug-Ausgaben
+ */
+void onBinaryDataReceived(const uint8_t* data, size_t size) {
+    totalPacketsReceived++;
+    totalBytesReceived += size;
+    
+    SerialMon.println("\n" + String('=', 60));
+    SerialMon.println("BINÄRDATEN-PAKET EMPFANGEN!");
+    SerialMon.println(String('=', 60));
+    SerialMon.print("Paket #: ");
+    SerialMon.println(totalPacketsReceived);
+    SerialMon.print("Größe: ");
+    SerialMon.print(size);
+    SerialMon.println(" Bytes");
+    SerialMon.print("Timestamp: ");
+    SerialMon.print(millis());
+    SerialMon.println(" ms");
+    
+    // Rohes Hex-Dump mit Adressierung
+    SerialMon.println("\nHEX-DUMP:");
+    for (size_t i = 0; i < size; i += 16) {
+        // Adresse
+        SerialMon.print("0x");
+        if (i < 16) SerialMon.print("0");
+        SerialMon.print(i, HEX);
+        SerialMon.print(": ");
+        
+        // Hex-Werte
+        for (size_t j = 0; j < 16 && (i + j) < size; j++) {
+            if (data[i + j] < 16) SerialMon.print("0");
+            SerialMon.print(data[i + j], HEX);
+            SerialMon.print(" ");
+        }
+        
+        // ASCII-Darstellung
+        SerialMon.print(" | ");
+        for (size_t j = 0; j < 16 && (i + j) < size; j++) {
+            char c = data[i + j];
+            if (c >= 32 && c <= 126) {
+                SerialMon.print(c);
+            } else {
+                SerialMon.print(".");
+            }
+        }
+        SerialMon.println();
+    }
+    
+    // Versuch der Sensor-Dekodierung
+    SerialMon.println("\nSENSOR-DEKODIERUNG:");
+    size_t index = 0;
+    while (index < size) {
+        if (index + 1 > size) break;
+        
+        char sensorType = (char)data[index];
+        SerialMon.print("Byte ");
+        SerialMon.print(index);
+        SerialMon.print(": Sensor-Typ '");
+        SerialMon.print(sensorType);
+        SerialMon.println("'");
+        
+        index++;
+        
+        if (sensorType == 'T' && index + 8 <= size) {
+            // Temperatur - 2 Float-Werte
+            union { float f; uint8_t bytes[4]; } temp1, temp2;
+            for (int i = 0; i < 4; i++) {
+                temp1.bytes[i] = data[index + i];
+                temp2.bytes[i] = data[index + 4 + i];
+            }
+            SerialMon.print("  -> Temp1: ");
+            SerialMon.print(temp1.f);
+            SerialMon.print("°C, Temp2: ");
+            SerialMon.print(temp2.f);
+            SerialMon.println("°C");
+            index += 8;
+        } else if ((sensorType == 'D' || sensorType == 'P' || sensorType == 'S') && index + 4 <= size) {
+            // Deflection, Pressure, PIC Temp - 1 Float-Wert
+            union { float f; uint8_t bytes[4]; } value;
+            for (int i = 0; i < 4; i++) {
+                value.bytes[i] = data[index + i];
+            }
+            SerialMon.print("  -> ");
+            switch (sensorType) {
+                case 'D': SerialMon.print("Deflection: "); break;
+                case 'P': SerialMon.print("Pressure: "); break;
+                case 'S': SerialMon.print("PIC Temp: "); break;
+            }
+            SerialMon.println(value.f);
+            index += 4;
+        } else {
+            SerialMon.print("  -> FEHLER: Unbekannter Sensor-Typ oder unvollständige Daten");
+            SerialMon.print(" (verbleibende Bytes: ");
+            SerialMon.print(size - index);
+            SerialMon.println(")");
+            break;
+        }
+    }
+    
+    SerialMon.println("\nSTATISTIK:");
+    SerialMon.print("Gesamt-Pakete: ");
+    SerialMon.println(totalPacketsReceived);
+    SerialMon.print("Gesamt-Bytes: ");
+    SerialMon.println(totalBytesReceived);
+    SerialMon.print("Durchschnittliche Paketgröße: ");
+    if (totalPacketsReceived > 0) {
+        SerialMon.print(totalBytesReceived / totalPacketsReceived);
+        SerialMon.println(" Bytes");
+    } else {
+        SerialMon.println("0 Bytes");
+    }
+    
+    SerialMon.println(String('=', 60));
+    SerialMon.println("PAKET-VERARBEITUNG ABGESCHLOSSEN");
+    SerialMon.println(String('=', 60) + "\n");
+}
+
+void setup() {
+    SerialMon.begin(SERIAL_MON_BAUDRATE);
+    delay(1000);
+    
+    SerialMon.println("\n" + String('=', 60));
+    SerialMon.println("UART RECEIVER - BINÄRDATEN DEBUG-MODUS");
+    SerialMon.println(String('=', 60));
+    
+    // UARTReceiver initialisieren
+    if (!uartReceiver.begin()) {
+        SerialMon.println("FEHLER: UARTReceiver konnte nicht initialisiert werden!");
+        while (true) {
+            delay(1000);
+        }
+    }
+    
+    // Binärdaten-Modus aktivieren
+    SerialMon.println("Aktiviere Binärdaten-Modus...");
+    uartReceiver.setBinaryMode(true);
+    uartReceiver.setExpectedPayloadSize(24);  // 24-Byte-Pakete erwarten
+    
+    // Debug-Callback setzen
+    uartReceiver.setBinaryCallback(onBinaryDataReceived);
+    
+    // Timeout-Callback
+    uartReceiver.setTimeoutCallback([](unsigned long timeout) {
+        SerialMon.print("\n[TIMEOUT] Keine Daten seit ");
+        SerialMon.print(timeout / 1000);
+        SerialMon.println(" Sekunden");
+    });
+    
+    // Status-Callback
+    uartReceiver.setStatusCallback([](uint32_t messages, uint32_t bytes, unsigned long uptime) {
+        SerialMon.print("\n[STATUS] Nachrichten: ");
+        SerialMon.print(messages);
+        SerialMon.print(", Bytes: ");
+        SerialMon.print(bytes);
+        SerialMon.print(", Uptime: ");
+        SerialMon.print(uptime / 1000);
+        SerialMon.println(" s");
+    });
+    
+    uartReceiver.displaySystemInfo();
+    
+    SerialMon.println("\nKONFIGURATION:");
+    SerialMon.println("- Modus: BINÄRDATEN");
+    SerialMon.println("- Erwartete Paketgröße: 24 Bytes");
+    SerialMon.println("- Format: T<float><float>D<float>P<float>S<float>");
+    SerialMon.println("- UART-Port: Serial2");
+    SerialMon.print("- Baudrate: ");
+    SerialMon.println(UART2_BAUDRATE);
+    SerialMon.println("\nBereit für Datenempfang...");
+    SerialMon.println(String('=', 60) + "\n");
+}
+
+void loop() {
+    uartReceiver.process();
+    
+    // Heartbeat alle 30 Sekunden
+    static unsigned long lastHeartbeat = 0;
+    if (millis() - lastHeartbeat > 30000) {
+        SerialMon.print("[HEARTBEAT] System läuft - Uptime: ");
+        SerialMon.print(millis() / 1000);
+        SerialMon.println(" s");
+        lastHeartbeat = millis();
+    }
+    
+    delay(1);
+}
