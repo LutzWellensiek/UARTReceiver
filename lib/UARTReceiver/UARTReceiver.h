@@ -47,7 +47,7 @@ typedef void (*UARTJSONCallback)(JsonObject data);
 typedef void (*UARTTextCallback)(const String& text);
 typedef void (*UARTTimeoutCallback)(unsigned long timeoutMs);
 typedef void (*UARTStatusCallback)(uint32_t messages, uint32_t bytes, unsigned long uptime);
-typedef void (*UARTBinaryCallback)(const uint8_t* data, size_t size);
+typedef void (*UARTBinaryCallback)(const uint8_t* data, size_t size, const char* deviceId = nullptr);
 
 /**
  * @brief UART-Empfänger Klasse
@@ -110,7 +110,7 @@ private:
     void sendHeartbeat();
     
     // Binärdaten-Hilfsfunktionen
-    void processBinaryPayload(const uint8_t* payload, size_t size);
+    void processBinaryPayload(const uint8_t* payload, size_t size, const char* deviceId = nullptr);
     float readFloat(const uint8_t* data, size_t startIndex);
     void checkPayloadTimeout();
     

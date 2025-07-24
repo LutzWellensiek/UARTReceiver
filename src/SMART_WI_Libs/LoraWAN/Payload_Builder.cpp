@@ -47,19 +47,21 @@ PayloadResult buildPayload(uint8_t* buffer, size_t bufferSize,
         // Prüfen ob genug Platz im Buffer: 1 Byte für 'T' + (Anzahl Werte * 4 Bytes pro Float)
         if (offset + 1 + (tempCount * 4) > bufferSize) return {nullptr, 0};  // Fehler: Buffer zu klein
         
-        // Typ-Kennzeichnung 'T' (0x54) in den Buffer schreiben
-        buffer[offset++] = 'T';  // offset wird nach dem Schreiben um 1 erhöht
-        
-        // Alle gültigen Temperaturwerte in den Buffer schreiben
+        // TLV: Typ (Tag), Länge und Wert
         for (int i = 0; i < 4; i++) {
-            if (!isnan(temperatures[i])) {  // Nur gültige Werte
-                // Float in 4 Bytes umwandeln und in Buffer schreiben
+            if (!isnan(temperatures[i])) {
+                // Stellen Sie sicher, dass genug Platz für Tag, Länge und Wert vorhanden ist
+                if (offset + 1 + 1 + 4 > bufferSize) return {nullptr, 0};
+
+                buffer[offset++] = TAG_TEMPERATURE;  // Tag für Temperatur
+                buffer[offset++] = 4;     // Length
+
                 floatToBytes(temperatures[i], &buffer[offset]);
-                offset += 4;  // offset um 4 erhöhen (1 Float = 4 Bytes)
+                offset += 4;
             }
         }
     }
-    // Nach diesem Block: Buffer enthält z.B. ['T'][temp1_byte1][temp1_byte2][temp1_byte3][temp1_byte4][temp2_byte1]...
+    // Nach diesem Block: Buffer enthält z.B. [0x01][0x04][temp1_bytes][0x01][0x04][temp2_bytes]...
     
     // ========== DEFLECTION-WERTE VERARBEITEN ==========
     // Gleiche Logik wie bei Temperatur, aber für Deflection-Werte
@@ -74,18 +76,21 @@ PayloadResult buildPayload(uint8_t* buffer, size_t bufferSize,
         // Prüfen ob genug Platz im Buffer (zusätzlich zu dem was schon drin ist)
         if (offset + 1 + (deflCount * 4) > bufferSize) return {nullptr, 0};
         
-        // Typ-Kennzeichnung 'D' (0x44) in den Buffer schreiben
-        buffer[offset++] = 'D';
-        
-        // Alle gültigen Deflection-Werte hinzufügen
+        // TLV: Typ (Tag), Länge und Wert
         for (int i = 0; i < 3; i++) {
             if (!isnan(deflections[i])) {
+                // Stellen Sie sicher, dass genug Platz für Tag, Länge und Wert vorhanden ist
+                if (offset + 1 + 1 + 4 > bufferSize) return {nullptr, 0};
+
+                buffer[offset++] = TAG_DEFLECTION;  // Tag für Deflection
+                buffer[offset++] = 4;     // Length
+
                 floatToBytes(deflections[i], &buffer[offset]);
                 offset += 4;
             }
         }
     }
-    // Nach diesem Block: Buffer enthält zusätzlich ['D'][defl1_bytes][defl2_bytes]...
+    // Nach diesem Block: Buffer enthält zusätzlich [0x02][0x04][defl1_bytes]...
     
     // ========== DRUCK-WERTE VERARBEITEN ==========
     float pressures[2] = {press1, press2};
@@ -98,11 +103,15 @@ PayloadResult buildPayload(uint8_t* buffer, size_t bufferSize,
     if (pressCount > 0) {
         if (offset + 1 + (pressCount * 4) > bufferSize) return {nullptr, 0};
         
-        // Typ-Kennzeichnung 'P' (0x50) in den Buffer schreiben
-        buffer[offset++] = 'P';
-        
+        // TLV: Typ (Tag), Länge und Wert
         for (int i = 0; i < 2; i++) {
             if (!isnan(pressures[i])) {
+                // Stellen Sie sicher, dass genug Platz für Tag, Länge und Wert vorhanden ist
+                if (offset + 1 + 1 + 4 > bufferSize) return {nullptr, 0};
+
+                buffer[offset++] = TAG_PRESSURE;  // Tag für Pressure
+                buffer[offset++] = 4;     // Length
+
                 floatToBytes(pressures[i], &buffer[offset]);
                 offset += 4;
             }
@@ -120,11 +129,15 @@ PayloadResult buildPayload(uint8_t* buffer, size_t bufferSize,
     if (miscCount > 0) {
         if (offset + 1 + (miscCount * 4) > bufferSize) return {nullptr, 0};
         
-        // Typ-Kennzeichnung 'S' (0x53) in den Buffer schreiben
-        buffer[offset++] = 'S';
-        
+        // TLV: Typ (Tag), Länge und Wert
         for (int i = 0; i < 2; i++) {
             if (!isnan(miscValues[i])) {
+                // Stellen Sie sicher, dass genug Platz für Tag, Länge und Wert vorhanden ist
+                if (offset + 1 + 1 + 4 > bufferSize) return {nullptr, 0};
+
+                buffer[offset++] = TAG_MISC;  // Tag für Misc
+                buffer[offset++] = 4;     // Length
+
                 floatToBytes(miscValues[i], &buffer[offset]);
                 offset += 4;
             }
@@ -132,8 +145,8 @@ PayloadResult buildPayload(uint8_t* buffer, size_t bufferSize,
     }
     
     // Rückgabe: Befüllter Buffer und dessen Größe
-    // Beispiel: Wenn 2 Temps + 1 Deflection verwendet werden:
-    // 1 Byte ('T') + 8 Bytes (2 Floats) + 1 Byte ('D') + 4 Bytes (1 Float) = 14 Bytes
+    // Beispiel mit TLV: Wenn 2 Temps + 1 Deflection verwendet werden:
+    // 2*(1 Byte Tag + 1 Byte Length + 4 Bytes Float) + 1*(1 Byte Tag + 1 Byte Length + 4 Bytes Float) = 18 Bytes
     return {buffer, offset};
 }
 
@@ -142,72 +155,88 @@ void decodePayload(const uint8_t* payload, size_t size) {
     
     size_t offset = 0;
     
-    SerialMon.println(F("=== Payload Decode ==="));
+    // Header entfernt für kompaktere Ausgabe
     
     while (offset < size) {
-        char sensorType = (char)payload[offset++];
-        
-        switch (sensorType) {
-            case 'T':
-                SerialMon.print(F("Temperature: "));
-                while (offset + 4 <= size && offset < size && 
-                       (payload[offset] != 'T' && payload[offset] != 'D' && 
-                        payload[offset] != 'P' && payload[offset] != 'S')) {
+        if (offset + 2 > size) {
+            // Fehler: Ungültige TLV-Struktur
+            SerialMon.println(F("Invalid TLV structure"));
+            return;
+        }
+
+        uint8_t tag = payload[offset++];
+        uint8_t length = payload[offset++];
+
+        if (offset + length > size) {
+            // Fehler: Daten sind nicht vollständig
+            SerialMon.println(F("Incomplete data for TLV"));
+            return;
+        }
+
+        switch (tag) {
+            case TAG_TEMPERATURE:
+                if (length == 4) {
                     float temp = bytesToFloat(&payload[offset]);
+                    SerialMon.print(F("Temperature: "));
                     SerialMon.print(temp, 2);
-                    SerialMon.print(F("°C "));
-                    offset += 4;
+                    SerialMon.println(F("°C"));
+                    offset += length;
+                } else {
+                    SerialMon.println(F("Invalid temperature data length"));
+                    offset += length;
                 }
-                SerialMon.println();
                 break;
                 
-            case 'D':
-                SerialMon.print(F("Deflection: "));
-                while (offset + 4 <= size && offset < size && 
-                       (payload[offset] != 'T' && payload[offset] != 'D' && 
-                        payload[offset] != 'P' && payload[offset] != 'S')) {
+            case TAG_DEFLECTION:
+                if (length == 4) {
                     float defl = bytesToFloat(&payload[offset]);
+                    SerialMon.print(F("Deflection: "));
                     SerialMon.print(defl, 4);
-                    SerialMon.print(F("mm "));
-                    offset += 4;
+                    SerialMon.println(F("mm"));
+                    offset += length;
+                } else {
+                    SerialMon.println(F("Invalid deflection data length"));
+                    offset += length;
                 }
-                SerialMon.println();
                 break;
                 
-            case 'P':
-                SerialMon.print(F("Pressure: "));
-                while (offset + 4 <= size && offset < size && 
-                       (payload[offset] != 'T' && payload[offset] != 'D' && 
-                        payload[offset] != 'P' && payload[offset] != 'S')) {
+            case TAG_PRESSURE:
+                if (length == 4) {
                     float press = bytesToFloat(&payload[offset]);
+                    SerialMon.print(F("Pressure: "));
                     SerialMon.print(press, 2);
-                    SerialMon.print(F("hPa "));
-                    offset += 4;
+                    SerialMon.println(F("hPa"));
+                    offset += length;
+                } else {
+                    SerialMon.println(F("Invalid pressure data length"));
+                    offset += length;
                 }
-                SerialMon.println();
                 break;
                 
-            case 'S':
-                SerialMon.print(F("Misc: "));
-                while (offset + 4 <= size && offset < size && 
-                       (payload[offset] != 'T' && payload[offset] != 'D' && 
-                        payload[offset] != 'P' && payload[offset] != 'S')) {
+            case TAG_MISC:
+                if (length == 4) {
                     float miscVal = bytesToFloat(&payload[offset]);
-                    SerialMon.print(miscVal, 2);
-                    SerialMon.print(F(" "));
-                    offset += 4;
+                    SerialMon.print(F("Misc: "));
+                    SerialMon.println(miscVal, 2);
+                    offset += length;
+                } else {
+                    SerialMon.println(F("Invalid misc data length"));
+                    offset += length;
                 }
-                SerialMon.println();
                 break;
                 
             default:
-                SerialMon.print(F("Unknown sensor type: "));
-                SerialMon.println(sensorType);
-                return;
+                SerialMon.print(F("Unknown tag: 0x"));
+                SerialMon.print(tag, HEX);
+                SerialMon.print(F(" with length: "));
+                SerialMon.println(length);
+                // Skip unknown tags
+                offset += length;
+                break;
         }
     }
     
-    SerialMon.println(F("=== End Decode ==="));
+    // Footer entfernt für kompaktere Ausgabe
 }
 
 void printPayloadHex(const uint8_t* payload, size_t size) {

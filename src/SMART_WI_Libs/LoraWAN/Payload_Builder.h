@@ -14,6 +14,12 @@
 // Special value to indicate "not used"
 #define NO_VALUE NAN
 
+// TLV Tags for different sensor types
+#define TAG_TEMPERATURE  0x01
+#define TAG_DEFLECTION   0x02
+#define TAG_PRESSURE     0x03
+#define TAG_MISC         0x04
+
 /**
  * Builds a payload from individual sensor values
  * Only adds values that are not NAN to the payload

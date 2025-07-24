@@ -146,13 +146,15 @@ void UARTReceiver::process() {
         _dataReceivedSinceLastCheck = true;
         
         if (_binaryMode) {
-            // Binärdaten-Modus - sammle komplette Payload
+            // Binärdaten-Modus - sammle Daten mit TLV-Erkennung
             while (_serial->available() > 0) {
                 uint8_t inByte = _serial->read();
                 _totalBytesReceived++;
+                _lastDataReceived = millis();
                 
-                // Debug-Ausgabe (optional)
-                if (_debugSerial) {
+                // Debug-Ausgabe nur für Payload-Bytes (nicht für Device-ID)
+                if (_debugSerial && _bufferIndex > 18) {
+                    if (inByte < 16) _debugSerial->print("0");
                     _debugSerial->print(inByte, HEX);
                     _debugSerial->print(" ");
                 }
@@ -161,48 +163,92 @@ void UARTReceiver::process() {
                 _binaryBuffer[_bufferIndex] = inByte;
                 _bufferIndex++;
                 
-                // Prüfe auf komplette Payload (28 Bytes erwartet)
-                if (_bufferIndex >= _expectedPayloadSize) {
-                    if (_debugSerial) {
-                        _debugSerial->println("\n[INFO] Komplette Payload empfangen");
-                    }
-                    
-                    // Prüfe verschiedene Formate
-                    bool messageProcessed = false;
-                    
-                    // Format 1: Device-Name-Prefix ("DEVICE_NAME: " + payload)
-                    for (size_t i = 0; i < _bufferIndex - 1; i++) {
-                        if (_binaryBuffer[i] == ':' && _binaryBuffer[i + 1] == ' ') {
-                            size_t payloadStart = i + 2;
-                            size_t payloadSize = _bufferIndex - payloadStart;
-                            
-                            if (payloadSize > 0) {
-                                if (_debugSerial) {
-                                    _debugSerial->println("[INFO] Bridge-Format erkannt");
-                                }
-                                processBinaryPayload(_binaryBuffer + payloadStart, payloadSize);
-                                messageProcessed = true;
+                // Intelligente Nachrichtenerkennung
+                // 1. Prüfe auf Device-ID Format (16 ASCII-Hex-Zeichen + ": ")
+                bool hasDeviceId = false;
+                size_t payloadStart = 0;
+                
+                // Prüfe ob wir genug Bytes für Device-ID haben (16 + 2 = 18 Bytes minimum)
+                if (_bufferIndex >= 18) {
+                    // Prüfe ob Byte 16 und 17 dem Pattern ": " entsprechen
+                    if (_binaryBuffer[16] == ':' && _binaryBuffer[17] == ' ') {
+                        // Prüfe ob die ersten 16 Bytes ASCII-Hex-Zeichen sind
+                        bool isValidDeviceId = true;
+                        for (size_t i = 0; i < 16; i++) {
+                            uint8_t b = _binaryBuffer[i];
+                            if (!((b >= '0' && b <= '9') || 
+                                  (b >= 'a' && b <= 'f') || 
+                                  (b >= 'A' && b <= 'F'))) {
+                                isValidDeviceId = false;
                                 break;
                             }
                         }
-                    }
-                    
-                    // Format 2: Direkte Payload (beginnt mit Sensor-Typ)
-                    if (!messageProcessed) {
-                        if (_debugSerial) {
-                            _debugSerial->println("[INFO] Direct-Payload erkannt");
+                        
+                        if (isValidDeviceId) {
+                            hasDeviceId = true;
+                            payloadStart = 18; // Nach Device-ID + ": "
                         }
-                        processBinaryPayload(_binaryBuffer, _bufferIndex);
+                    }
+                }
+                
+                // 2. TLV-basierte Nachrichtenlängen-Erkennung
+                if (_bufferIndex >= 2) {  // Mindestens Tag + Length
+                    size_t expectedSize = 0;
+                    size_t offset = hasDeviceId ? payloadStart : 0;
+                    
+                    // Berechne erwartete Gesamtgröße basierend auf TLV-Struktur
+                    while (offset + 2 <= _bufferIndex) {
+                        uint8_t tag = _binaryBuffer[offset];
+                        uint8_t length = _binaryBuffer[offset + 1];
+                        
+                        // Prüfe auf gültige TLV-Tags (0x01-0x04)
+                        if (tag >= 0x01 && tag <= 0x04) {
+                            expectedSize = offset + 2 + length;
+                            
+                            // Wenn wir genug Daten für dieses TLV haben, prüfe weiter
+                            if (expectedSize <= _bufferIndex) {
+                                offset = expectedSize;
+                            } else {
+                                // Warte auf mehr Daten
+                                break;
+                            }
+                        } else if (offset == (hasDeviceId ? payloadStart : 0)) {
+                            // Erstes Byte ist kein gültiger TLV-Tag
+                            // Verwende die konfigurierte erwartete Größe
+                            expectedSize = (hasDeviceId ? payloadStart : 0) + _expectedPayloadSize;
+                            break;
+                        } else {
+                            // Ende der TLV-Kette erreicht
+                            expectedSize = offset;
+                            break;
+                        }
                     }
                     
-                    // Puffer zurücksetzen
-                    _bufferIndex = 0;
+                    // Prüfe ob komplette Nachricht empfangen wurde
+                    if (_bufferIndex >= expectedSize && expectedSize > 0) {
+                        // Verarbeite die Nachricht
+                        if (hasDeviceId) {
+                            // Extrahiere Device-ID als String
+                            char deviceId[17];
+                            for (size_t i = 0; i < 16; i++) {
+                                deviceId[i] = (char)_binaryBuffer[i];
+                            }
+                            deviceId[16] = '\0';
+                            
+                            processBinaryPayload(_binaryBuffer + payloadStart, _bufferIndex - payloadStart, deviceId);
+                        } else {
+                            processBinaryPayload(_binaryBuffer, _bufferIndex);
+                        }
+                        
+                        // Puffer zurücksetzen
+                        _bufferIndex = 0;
+                    }
                 }
                 
                 // Pufferüberlauf verhindern
                 if (_bufferIndex >= MAX_PAYLOAD_SIZE) {
                     if (_debugSerial) {
-                        _debugSerial->println("ERROR: Buffer overflow!");
+                        _debugSerial->println("\nERROR: Buffer overflow!");
                     }
                     _bufferIndex = 0;
                 }
@@ -423,11 +469,12 @@ void UARTReceiver::checkDataTimeout() {
     if ((currentTime - _lastDataReceived) >= _timeoutMs) {
         // Nur alle _timeoutMs eine Meldung ausgeben
         if ((currentTime - _lastTimeoutMessage) >= _timeoutMs) {
-            if (_debugSerial) {
-                _debugSerial->print("[INFO] Keine Daten seit ");
-                _debugSerial->print((currentTime - _lastDataReceived) / 1000);
-                _debugSerial->println(" Sekunden");
-            }
+            // Info-Nachricht deaktiviert für kompaktere Ausgabe
+            // if (_debugSerial) {
+            //     _debugSerial->print("[INFO] Keine Daten seit ");
+            //     _debugSerial->print((currentTime - _lastDataReceived) / 1000);
+            //     _debugSerial->println(" Sekunden");
+            // }
             
             // Timeout-Callback aufrufen
             if (_timeoutCallback) {
@@ -476,9 +523,10 @@ void UARTReceiver::displayPeriodicStatus() {
  */
 void UARTReceiver::sendHeartbeat() {
     if(millis() - _lastHeartbeat > _heartbeatInterval) {
-        if (_debugSerial) {
-            _debugSerial->println("HEARTBEAT");
-        }
+        // Heartbeat deaktiviert für kompaktere Ausgabe
+        // if (_debugSerial) {
+        //     _debugSerial->println("HEARTBEAT");
+        // }
         _lastHeartbeat = millis();
     }
 }
@@ -705,190 +753,15 @@ void UARTReceiver::clearBuffer() {
 /**
  * @brief Verarbeitet eine empfangene Binär-Payload
  */
-void UARTReceiver::processBinaryPayload(const uint8_t* payload, size_t size) {
-    if (_debugSerial) {
-        _debugSerial->println("=== BINÄRE PAYLOAD EMPFANGEN ===");
-        _debugSerial->print("Größe: ");
-        _debugSerial->println(size);
-        
-        // Hex-Dump ausgeben
-        for (size_t i = 0; i < size; i++) {
-            if (payload[i] < 16) _debugSerial->print("0");
-            _debugSerial->print(payload[i], HEX);
-            _debugSerial->print(" ");
-        }
-        _debugSerial->println();
-        
-        // Vollständige Daten ausgeben
-        _debugSerial->println("\n[VOLLSTÄNDIGE DEKODIERUNG]");
-        size_t index = 0;
-        while (index < size) {
-            char typ = (char)payload[index];
-            index++;
-            
-            if (typ == 'T') {  // Temperatur
-                if (index + 8 <= size) {
-                    float temp1 = readFloat(payload, index);
-                    index += 4;
-                    float temp2 = readFloat(payload, index);
-                    index += 4;
-                    
-                    _debugSerial->print("Temp1: ");
-                    _debugSerial->print(temp1);
-                    _debugSerial->print(", Temp2: ");
-                    _debugSerial->println(temp2);
-                }
-            } else if (typ == 'D') {  // Deflection
-                if (index + 4 <= size) {
-                    float deflection = readFloat(payload, index);
-                    index += 4;
-                    
-                    _debugSerial->print("Deflection: ");
-                    _debugSerial->println(deflection);
-                }
-            } else if (typ == 'P') {  // Pressure and Misc
-                if (index + 4 <= size) {
-                    float pressure = readFloat(payload, index);
-                    index += 4;
-                    
-                    _debugSerial->print("Pressure: ");
-                    _debugSerial->println(pressure);
-                }
-                if (index + 8 <= size) {
-                    // Next section - presumably Misc
-                    float misc1 = readFloat(payload, index);
-                    index += 4;
-                    float misc2 = readFloat(payload, index);
-                    index += 4;
-                    
-                    _debugSerial->print("Misc1: ");
-                    _debugSerial->print(misc1);
-                    _debugSerial->print(", Misc2: ");
-                    _debugSerial->println(misc2);
-                }
-            }
-        }
-        _debugSerial->println("[ENDE VOLLSTÄNDIGE DEKODIERUNG]");
-    }
-    
-    // Dekodiere Sensordaten (basierend auf deiner Endnode)
-    size_t index = 0;
-    while (index < size) {
-        char typ = (char)payload[index];
-        index++;
-        
-        if (typ == 'T') {  // Temperatur
-            if (index + 8 <= size) {
-                float temp1 = readFloat(payload, index);
-                index += 4;
-                float temp2 = readFloat(payload, index);
-                index += 4;
-                
-                if (_debugSerial) {
-                    _debugSerial->print("Temp1: ");
-                    _debugSerial->println(temp1);
-                    _debugSerial->print("Temp2: ");
-                    _debugSerial->println(temp2);
-                }
-            } else {
-                if (_debugSerial) {
-                    _debugSerial->println("ERROR: Unvollständige Temperaturdaten");
-                }
-                break;
-            }
-        } else if (typ == 'D') {  // Deflection
-            if (index + 4 <= size) {
-                float deflection = readFloat(payload, index);
-                index += 4;
-                
-                if (_debugSerial) {
-                    _debugSerial->print("Deflection: ");
-                    _debugSerial->println(deflection);
-                }
-            } else {
-                if (_debugSerial) {
-                    _debugSerial->println("ERROR: Unvollständige Deflection-Daten");
-                }
-                break;
-            }
-        } else if (typ == 'P') {  // Pressure - variabel 1 oder 2 Float-Werte
-            // Prüfe ob P+S Kombination (P hat nur 1 Float wenn gefolgt von S)
-            if (index + 4 < size && payload[index + 4] == 'S') {
-                // P+S Kombination: P hat nur 1 Float
-                if (index + 4 <= size) {
-                    float pressure = readFloat(payload, index);
-                    index += 4;
-                    
-                    if (_debugSerial) {
-                        _debugSerial->print("Pressure: ");
-                        _debugSerial->println(pressure);
-                    }
-                } else {
-                    if (_debugSerial) {
-                        _debugSerial->println("ERROR: Unvollständige Pressure-Daten (P+S)");
-                    }
-                    break;
-                }
-            } else {
-                // Standard P Block mit 2 Float-Werten
-                if (index + 8 <= size) {
-                    float pressure1 = readFloat(payload, index);
-                    index += 4;
-                    float pressure2 = readFloat(payload, index);
-                    index += 4;
-                    
-                    if (_debugSerial) {
-                        _debugSerial->print("Pressure1: ");
-                        _debugSerial->println(pressure1);
-                        _debugSerial->print("Pressure2: ");
-                        _debugSerial->println(pressure2);
-                    }
-                } else {
-                    if (_debugSerial) {
-                        _debugSerial->println("ERROR: Unvollständige Pressure-Daten");
-                    }
-                    break;
-                }
-            }
-        } else if (typ == 'S') {  // Sonstiges - 2 Float-Werte
-            if (index + 8 <= size) {
-                float misc1 = readFloat(payload, index);
-                index += 4;
-                float misc2 = readFloat(payload, index);
-                index += 4;
-                
-                if (_debugSerial) {
-                    _debugSerial->print("Misc1: ");
-                    _debugSerial->println(misc1);
-                    _debugSerial->print("Misc2: ");
-                    _debugSerial->println(misc2);
-                }
-            } else {
-                if (_debugSerial) {
-                    _debugSerial->println("ERROR: Unvollständige Sonstiges-Daten");
-                }
-                break;
-            }
-        } else {
-            if (_debugSerial) {
-                _debugSerial->print("Unbekannter Typ: ");
-                _debugSerial->println(typ);
-            }
-            break;  // Stoppe Verarbeitung bei unbekanntem Typ
-        }
-    }
-    
-    // Callback für verarbeitete Daten
+void UARTReceiver::processBinaryPayload(const uint8_t* payload, size_t size, const char* deviceId) {
+    // Callback für verarbeitete Daten direkt aufrufen
+    // Die eigentliche Dekodierung erfolgt im Callback
     if (_binaryCallback) {
-        _binaryCallback(payload, size);
+        _binaryCallback(payload, size, deviceId);
     }
     
     _totalMessagesReceived++;
     _lastBinaryDataReceived = millis();
-    
-    if (_debugSerial) {
-        _debugSerial->println("=== ENDE BINÄRE PAYLOAD ===");
-    }
 }
 
 /**
