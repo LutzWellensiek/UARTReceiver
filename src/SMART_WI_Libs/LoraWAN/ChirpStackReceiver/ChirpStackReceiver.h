@@ -16,7 +16,6 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <UARTReceiver.h>
-#include <vector>
 #include "../../KitConfig.h"
 #include "../../SerialMon.h"
 #include "../Payload_Builder.h"
@@ -43,24 +42,39 @@ struct SensorValue {
  * @brief Struktur für alle dekodierten Sensordaten
  */
 struct SensorData {
+    static constexpr size_t MAX_SENSOR_VALUES = 16;  // Maximum number of sensor values
+    
     String deviceId;                    // Device ID (falls vorhanden)
-    std::vector<SensorValue> values;    // Alle Sensorwerte
+    SensorValue values[MAX_SENSOR_VALUES];  // Alle Sensorwerte
+    size_t valueCount;                  // Anzahl der gespeicherten Werte
     unsigned long lastUpdate;           // Zeitpunkt der letzten Aktualisierung
     size_t rawPayloadSize;              // Größe der Rohdaten
     
-    SensorData() : deviceId(""), lastUpdate(0), rawPayloadSize(0) {}
+    SensorData() : deviceId(""), valueCount(0), lastUpdate(0), rawPayloadSize(0) {}
     
     // Hilfsfunktionen für einfachen Zugriff
     float getTemperature(uint8_t index = 0) const;
     float getDeflection(uint8_t index = 0) const;
     float getPressure(uint8_t index = 0) const;
     float getMisc(uint8_t index = 0) const;
-    std::vector<float> getAllTemperatures() const;
-    std::vector<float> getAllDeflections() const;
-    std::vector<float> getAllPressures() const;
-    std::vector<float> getAllMisc() const;
-    bool hasData() const { return !values.empty(); }
+    
+    // Array-basierte Rückgabefunktionen
+    size_t getAllTemperatures(float* temps, size_t maxCount) const;
+    size_t getAllDeflections(float* defls, size_t maxCount) const;
+    size_t getAllPressures(float* pressures, size_t maxCount) const;
+    size_t getAllMisc(float* misc, size_t maxCount) const;
+    
+    bool hasData() const { return valueCount > 0; }
     void clear();
+    
+    // Hilfsfunktion zum Hinzufügen von Werten
+    bool addValue(const SensorValue& value) {
+        if (valueCount < MAX_SENSOR_VALUES) {
+            values[valueCount++] = value;
+            return true;
+        }
+        return false;
+    }
 };
 
 // ========================================

@@ -16,7 +16,7 @@
  */
 
 #include <Arduino.h>
-#include <ChirpStackReceiver.h>
+#include "SMART_WI_Libs/LoraWAN/ChirpStackReceiver/ChirpStackReceiver.h"
 #include "SMART_WI_Libs/KitConfig.h"
 #include "SMART_WI_Libs/SerialMon.h"
 
@@ -47,10 +47,11 @@ void displaySensorData(const SensorData& data) {
     SerialMon.println(data.lastUpdate);
     
     // Temperaturen
-    auto temps = data.getAllTemperatures();
-    if (temps.size() > 0) {
+    float temps[8];
+    size_t tempCount = data.getAllTemperatures(temps, 8);
+    if (tempCount > 0) {
         SerialMon.println(F("\nTemperaturen:"));
-        for (size_t i = 0; i < temps.size(); i++) {
+        for (size_t i = 0; i < tempCount; i++) {
             SerialMon.print(F("  T"));
             SerialMon.print(i + 1);
             SerialMon.print(F(": "));
@@ -60,10 +61,11 @@ void displaySensorData(const SensorData& data) {
     }
     
     // Deflections
-    auto defls = data.getAllDeflections();
-    if (defls.size() > 0) {
+    float defls[8];
+    size_t deflCount = data.getAllDeflections(defls, 8);
+    if (deflCount > 0) {
         SerialMon.println(F("\nDeflections:"));
-        for (size_t i = 0; i < defls.size(); i++) {
+        for (size_t i = 0; i < deflCount; i++) {
             SerialMon.print(F("  D"));
             SerialMon.print(i + 1);
             SerialMon.print(F(": "));
@@ -73,10 +75,11 @@ void displaySensorData(const SensorData& data) {
     }
     
     // Druck
-    auto pressures = data.getAllPressures();
-    if (pressures.size() > 0) {
+    float pressures[8];
+    size_t pressCount = data.getAllPressures(pressures, 8);
+    if (pressCount > 0) {
         SerialMon.println(F("\nDruck:"));
-        for (size_t i = 0; i < pressures.size(); i++) {
+        for (size_t i = 0; i < pressCount; i++) {
             SerialMon.print(F("  P"));
             SerialMon.print(i + 1);
             SerialMon.print(F(": "));
@@ -86,10 +89,11 @@ void displaySensorData(const SensorData& data) {
     }
     
     // Sonstige
-    auto misc = data.getAllMisc();
-    if (misc.size() > 0) {
+    float misc[8];
+    size_t miscCount = data.getAllMisc(misc, 8);
+    if (miscCount > 0) {
         SerialMon.println(F("\nSonstige:"));
-        for (size_t i = 0; i < misc.size(); i++) {
+        for (size_t i = 0; i < miscCount; i++) {
             SerialMon.print(F("  M"));
             SerialMon.print(i + 1);
             SerialMon.print(F(": "));

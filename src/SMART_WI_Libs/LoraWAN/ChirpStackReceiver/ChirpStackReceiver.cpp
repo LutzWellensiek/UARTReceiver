@@ -4,7 +4,8 @@
  */
 
 #include "ChirpStackReceiver.h"
-
+#include "../../SerialMon.h"
+#include "../Payload_Builder_Cayenne.h"
 // Definition der statischen Instanz
 ChirpStackReceiver* ChirpStackReceiver::instance = nullptr;
 
@@ -13,84 +14,84 @@ ChirpStackReceiver* ChirpStackReceiver::instance = nullptr;
 // ========================================
 
 float SensorData::getTemperature(uint8_t index) const {
-    for (const auto& val : values) {
-        if (val.tag == TAG_TEMPERATURE && val.index == index) {
-            return val.value;
+    for (size_t i = 0; i < valueCount; i++) {
+        if (values[i].tag == TAG_TEMPERATURE && values[i].index == index) {
+            return values[i].value;
         }
     }
     return NAN;
 }
 
 float SensorData::getDeflection(uint8_t index) const {
-    for (const auto& val : values) {
-        if (val.tag == TAG_DEFLECTION && val.index == index) {
-            return val.value;
+    for (size_t i = 0; i < valueCount; i++) {
+        if (values[i].tag == TAG_DEFLECTION && values[i].index == index) {
+            return values[i].value;
         }
     }
     return NAN;
 }
 
 float SensorData::getPressure(uint8_t index) const {
-    for (const auto& val : values) {
-        if (val.tag == TAG_PRESSURE && val.index == index) {
-            return val.value;
+    for (size_t i = 0; i < valueCount; i++) {
+        if (values[i].tag == TAG_PRESSURE && values[i].index == index) {
+            return values[i].value;
         }
     }
     return NAN;
 }
 
 float SensorData::getMisc(uint8_t index) const {
-    for (const auto& val : values) {
-        if (val.tag == TAG_MISC && val.index == index) {
-            return val.value;
+    for (size_t i = 0; i < valueCount; i++) {
+        if (values[i].tag == TAG_MISC && values[i].index == index) {
+            return values[i].value;
         }
     }
     return NAN;
 }
 
-std::vector<float> SensorData::getAllTemperatures() const {
-    std::vector<float> temps;
-    for (const auto& val : values) {
-        if (val.tag == TAG_TEMPERATURE) {
-            temps.push_back(val.value);
+size_t SensorData::getAllTemperatures(float* temps, size_t maxCount) const {
+    size_t count = 0;
+    for (size_t i = 0; i < valueCount && count < maxCount; i++) {
+        if (values[i].tag == TAG_TEMPERATURE) {
+            temps[count++] = values[i].value;
         }
     }
-    return temps;
+    return count;
 }
 
-std::vector<float> SensorData::getAllDeflections() const {
-    std::vector<float> defls;
-    for (const auto& val : values) {
-        if (val.tag == TAG_DEFLECTION) {
-            defls.push_back(val.value);
+size_t SensorData::getAllDeflections(float* defls, size_t maxCount) const {
+    size_t count = 0;
+    for (size_t i = 0; i < valueCount && count < maxCount; i++) {
+        if (values[i].tag == TAG_DEFLECTION) {
+            defls[count++] = values[i].value;
         }
     }
-    return defls;
+    return count;
 }
 
-std::vector<float> SensorData::getAllPressures() const {
-    std::vector<float> presses;
-    for (const auto& val : values) {
-        if (val.tag == TAG_PRESSURE) {
-            presses.push_back(val.value);
+size_t SensorData::getAllPressures(float* pressures, size_t maxCount) const {
+    size_t count = 0;
+    for (size_t i = 0; i < valueCount && count < maxCount; i++) {
+        if (values[i].tag == TAG_PRESSURE) {
+            pressures[count++] = values[i].value;
         }
     }
-    return presses;
+    return count;
 }
 
-std::vector<float> SensorData::getAllMisc() const {
-    std::vector<float> miscs;
-    for (const auto& val : values) {
-        if (val.tag == TAG_MISC) {
-            miscs.push_back(val.value);
+size_t SensorData::getAllMisc(float* misc, size_t maxCount) const {
+    size_t count = 0;
+    for (size_t i = 0; i < valueCount && count < maxCount; i++) {
+        if (values[i].tag == TAG_MISC) {
+            misc[count++] = values[i].value;
         }
     }
-    return miscs;
+    return count;
 }
 
 void SensorData::clear() {
     deviceId = "";
-    values.clear();
+    valueCount = 0;
     lastUpdate = 0;
     rawPayloadSize = 0;
 }
@@ -184,6 +185,20 @@ void ChirpStackReceiver::staticOnStatus(uint32_t messages, uint32_t bytes, unsig
 }
 
 void ChirpStackReceiver::onBinaryData(const uint8_t* data, size_t size) {
+    // Debug: Zeige empfangene Rohdaten
+    if (debugSerial) {
+        debugSerial->print(F("[DEBUG] Empfangen: "));
+        debugSerial->print(size);
+        debugSerial->print(F(" Bytes: "));
+        for (size_t i = 0; i < size && i < 32; i++) {
+            if (data[i] < 0x10) debugSerial->print("0");
+            debugSerial->print(data[i], HEX);
+            debugSerial->print(" ");
+        }
+        if (size > 32) debugSerial->print("...");
+        debugSerial->println();
+    }
+    
     // Prüfe ob Device-ID vorhanden ist
     String deviceId = "";
     const uint8_t* payloadData = data;
@@ -323,134 +338,18 @@ void ChirpStackMessageProcessor::decodeSensorData(const uint8_t* data, size_t si
     SerialMon.print(F("Empfangene Bytes: "));
     SerialMon.println(size);
     
-    // Verwende die Payload_Builder Dekodierungsfunktion
-    decodePayload(data, size);
+    // Verwende die CayenneLPP Dekodierungsfunktion
+    Payload_Builder_Cayenne::decodePayload(data, size);
     
     // Zeige Hex-Darstellung für Debug
-    printPayloadHex(data, size);
+    Payload_Builder_Cayenne::printPayloadHex(data, size);
     
     SerialMon.println(F("========================\n"));
 }
 
 SensorData ChirpStackMessageProcessor::decodeSensorDataToStruct(const uint8_t* data, size_t size, const String& deviceId) {
-    SensorData result;
-    result.deviceId = deviceId;
-    result.rawPayloadSize = size;
-    result.lastUpdate = millis();
-    
-    if (!data || size == 0) {
-        return result;
-    }
-    
-    size_t pos = 0;
-    uint8_t tempCount = 0, deflCount = 0, pressCount = 0, miscCount = 0;
-    
-    while (pos < size - 2) { // Mindestens Tag + Length + 1 Byte Daten
-        uint8_t tag = data[pos++];
-        uint8_t length = data[pos++];
-        
-        if (pos + length > size) {
-            break; // Nicht genug Daten
-        }
-        
-        // Verarbeite je nach Tag
-        uint8_t* currentCount = nullptr;
-        switch (tag) {
-            case TAG_TEMPERATURE:
-            case 'T':
-                currentCount = &tempCount;
-                break;
-            case TAG_DEFLECTION:
-            case 'D':
-                currentCount = &deflCount;
-                break;
-            case TAG_PRESSURE:
-            case 'P':
-                currentCount = &pressCount;
-                break;
-            case TAG_MISC:
-            case 'S':
-                currentCount = &miscCount;
-                break;
-            default:
-                pos += length; // Überspringe unbekannte Tags
-                continue;
-        }
-        
-        // Dekodiere Werte basierend auf der Länge
-        if (length == 2) {
-            // Ein int16_t Wert
-            if (pos + 2 <= size) {
-                int16_t rawValue = (data[pos] << 8) | data[pos + 1];
-                float value = rawValue / 100.0;
-                
-                // Normalisiere Tag auf numerischen Wert
-                uint8_t normalizedTag = tag;
-                if (tag == 'T') normalizedTag = TAG_TEMPERATURE;
-                else if (tag == 'D') normalizedTag = TAG_DEFLECTION;
-                else if (tag == 'P') normalizedTag = TAG_PRESSURE;
-                else if (tag == 'S') normalizedTag = TAG_MISC;
-                
-                result.values.push_back(SensorValue(normalizedTag, *currentCount, value));
-                (*currentCount)++;
-            }
-        } else if (length == 4) {
-            // Zwei int16_t Werte
-            for (int i = 0; i < 2 && pos + 2 <= size; i++) {
-                int16_t rawValue = (data[pos] << 8) | data[pos + 1];
-                float value = rawValue / 100.0;
-                pos += 2;
-                
-                // Normalisiere Tag auf numerischen Wert
-                uint8_t normalizedTag = tag;
-                if (tag == 'T') normalizedTag = TAG_TEMPERATURE;
-                else if (tag == 'D') normalizedTag = TAG_DEFLECTION;
-                else if (tag == 'P') normalizedTag = TAG_PRESSURE;
-                else if (tag == 'S') normalizedTag = TAG_MISC;
-                
-                result.values.push_back(SensorValue(normalizedTag, (*currentCount)++, value));
-            }
-            pos -= 2 * 2; // Zurücksetzen für die nächste Iteration
-        } else if (length == 6) {
-            // Drei int16_t Werte
-            for (int i = 0; i < 3 && pos + 2 <= size; i++) {
-                int16_t rawValue = (data[pos] << 8) | data[pos + 1];
-                float value = rawValue / 100.0;
-                pos += 2;
-                
-                // Normalisiere Tag auf numerischen Wert
-                uint8_t normalizedTag = tag;
-                if (tag == 'T') normalizedTag = TAG_TEMPERATURE;
-                else if (tag == 'D') normalizedTag = TAG_DEFLECTION;
-                else if (tag == 'P') normalizedTag = TAG_PRESSURE;
-                else if (tag == 'S') normalizedTag = TAG_MISC;
-                
-                result.values.push_back(SensorValue(normalizedTag, (*currentCount)++, value));
-            }
-            pos -= 3 * 2; // Zurücksetzen für die nächste Iteration
-        } else if (length == 8) {
-            // Vier int16_t Werte
-            for (int i = 0; i < 4 && pos + 2 <= size; i++) {
-                int16_t rawValue = (data[pos] << 8) | data[pos + 1];
-                float value = rawValue / 100.0;
-                pos += 2;
-                
-                // Normalisiere Tag auf numerischen Wert
-                uint8_t normalizedTag = tag;
-                if (tag == 'T') normalizedTag = TAG_TEMPERATURE;
-                else if (tag == 'D') normalizedTag = TAG_DEFLECTION;
-                else if (tag == 'P') normalizedTag = TAG_PRESSURE;
-                else if (tag == 'S') normalizedTag = TAG_MISC;
-                
-                result.values.push_back(SensorValue(normalizedTag, (*currentCount)++, value));
-            }
-            pos -= 4 * 2; // Zurücksetzen für die nächste Iteration
-        }
-        
-        pos += length;
-    }
-    
-    return result;
+    // Verwende die CayenneLPP Dekodierungsfunktion
+    return Payload_Builder_Cayenne::decodeCayenneToSensorData(data, size, deviceId);
 }
 
 ChirpStackMessageProcessor::DeviceInfo ChirpStackMessageProcessor::extractDeviceInfo(const uint8_t* data, size_t size) {
@@ -534,42 +433,42 @@ String ChirpStackReceiver::getSensorDataAsJson() const {
     doc["payloadSize"] = lastSensorData.rawPayloadSize;
     
     JsonArray temps = doc.createNestedArray("temperatures");
-    for (const auto& val : lastSensorData.values) {
-        if (val.tag == TAG_TEMPERATURE) {
+    for (size_t i = 0; i < lastSensorData.valueCount; i++) {
+        if (lastSensorData.values[i].tag == TAG_TEMPERATURE) {
             JsonObject temp = temps.createNestedObject();
-            temp["index"] = val.index;
-            temp["value"] = val.value;
-            temp["timestamp"] = val.timestamp;
+            temp["index"] = lastSensorData.values[i].index;
+            temp["value"] = lastSensorData.values[i].value;
+            temp["timestamp"] = lastSensorData.values[i].timestamp;
         }
     }
     
     JsonArray defls = doc.createNestedArray("deflections");
-    for (const auto& val : lastSensorData.values) {
-        if (val.tag == TAG_DEFLECTION) {
+    for (size_t i = 0; i < lastSensorData.valueCount; i++) {
+        if (lastSensorData.values[i].tag == TAG_DEFLECTION) {
             JsonObject defl = defls.createNestedObject();
-            defl["index"] = val.index;
-            defl["value"] = val.value;
-            defl["timestamp"] = val.timestamp;
+            defl["index"] = lastSensorData.values[i].index;
+            defl["value"] = lastSensorData.values[i].value;
+            defl["timestamp"] = lastSensorData.values[i].timestamp;
         }
     }
     
     JsonArray presses = doc.createNestedArray("pressures");
-    for (const auto& val : lastSensorData.values) {
-        if (val.tag == TAG_PRESSURE) {
+    for (size_t i = 0; i < lastSensorData.valueCount; i++) {
+        if (lastSensorData.values[i].tag == TAG_PRESSURE) {
             JsonObject press = presses.createNestedObject();
-            press["index"] = val.index;
-            press["value"] = val.value;
-            press["timestamp"] = val.timestamp;
+            press["index"] = lastSensorData.values[i].index;
+            press["value"] = lastSensorData.values[i].value;
+            press["timestamp"] = lastSensorData.values[i].timestamp;
         }
     }
     
     JsonArray miscs = doc.createNestedArray("misc");
-    for (const auto& val : lastSensorData.values) {
-        if (val.tag == TAG_MISC) {
+    for (size_t i = 0; i < lastSensorData.valueCount; i++) {
+        if (lastSensorData.values[i].tag == TAG_MISC) {
             JsonObject misc = miscs.createNestedObject();
-            misc["index"] = val.index;
-            misc["value"] = val.value;
-            misc["timestamp"] = val.timestamp;
+            misc["index"] = lastSensorData.values[i].index;
+            misc["value"] = lastSensorData.values[i].value;
+            misc["timestamp"] = lastSensorData.values[i].timestamp;
         }
     }
     
